@@ -19,21 +19,38 @@ From MetaCoq.Template Require Import
 
 Require Import Coq.Strings.String.
 Local Open Scope string_scope.
-Local Open Scope program_scope.
 
 
+
+
+(* utils *)
 Fixpoint zipWith {A B C : Type} (f : A -> B -> C) (la : list A) (lb : list B) : list C :=
   match la, lb with
   | a :: la', b :: lb' => f a b :: zipWith f la' lb'
   | _, _ => []
   end.
 
+Fixpoint descNatList (n : nat) : list nat :=
+  match n with
+  | S n' => n :: (descNatList n')
+  | 0 => [0]
+  end.
+
+Definition descRelList (n : nat) : list term :=
+  map tRel (descNatList n).
+
+Definition mapIndType {A} (f : term -> A) (ind : one_inductive_body) : A :=
+  f ind.(ind_type).
+
+Definition mapMindType {A} (f : term -> list A) (mind : mutual_inductive_body) : list A :=
+  flat_map (mapIndType f) mind.(ind_bodies).
+
+
 
 
 (* Universes and levels *)
 
 Definition empty_uni := Universe.of_levels (inr Level.lSet).  
-
 
 Definition levelsOfUni (uni : Universe.t) : list Level.t :=
   match uni with
@@ -42,86 +59,58 @@ Definition levelsOfUni (uni : Universe.t) : list Level.t :=
   | _ => []
   end.
 
-Fixpoint uniOfType (tm : term) : list Level.t :=
+Fixpoint levelsOfType (tm : term) : list Level.t :=  
   match tm with
-  | tProd _ _ tm => uniOfType tm
-  | tSort uni    => levelsOfUni uni
-  | _            => []
+  | tSort uni => levelsOfUni uni
+  | tProd _ tm1 tm2 => app (levelsOfType tm1) (levelsOfType tm2)
+  | _ => []
   end.
-
-Fixpoint uniFromType (type : term) : list Level.t :=  
-    match type with
-    | tSort uni => 
-        levelsOfUni uni
-    | tProd _ tm1 tm2 =>
-        app (uniFromType tm1) (uniFromType tm2)
-    | _ =>
-        []
-    end.
-
-Definition lvlsFromInd (ind : one_inductive_body) : list Level.t :=
-  uniFromType ind.(ind_type).
-
-Definition lvlsFromMind (mind : mutual_inductive_body) : list Level.t := 
-  flat_map lvlsFromInd mind.(ind_bodies).
-
-
 
 
 
 
 (* Inds kernames *)
 
-Fixpoint indsFromTerm (tm : term) : list kername :=
+Fixpoint indKernamesOfType (tm : term) : list kername :=
   match tm with
   | tProd _ tm1 tm2 =>
-      app (indsFromTerm tm1) (indsFromTerm tm2)
+      app (indKernamesOfType tm1) (indKernamesOfType tm2)
   | tApp (tInd ind _) _ =>
       [ind.(inductive_mind)]
   | _ =>
       []
   end.
 
-Definition indsFromInd (ind : one_inductive_body) : list kername :=
-  indsFromTerm ind.(ind_type).
-
-Definition indsFromMind (mind : mutual_inductive_body) : list kername :=
-  List.concat (map indsFromInd mind.(ind_bodies)).
-
-
-
   
 
 
 (* Inductive template definitions etc. *)
 
-Definition Constr := ((ident * term) * nat) : Type.
+Definition constructor := ((ident * term) * nat) : Type.
 
-Definition mkInductiveN (mod_path : modpath) (name : ident) (n : nat) : inductive :=
+Definition mkInductive n mod_path name : inductive :=
   {| inductive_mind := (mod_path, name); inductive_ind := n |}.
 
-Definition mkInductive (mod_path : modpath) (name : ident) : inductive :=
-  mkInductiveN mod_path name 0.
+Definition mkInductive0 := mkInductive 0.
 
 Definition mkConstructTerm (mod_path: modpath) (name : ident) (idx : nat) : term :=
-  tConstruct (mkInductive mod_path name) idx [].
+  tConstruct (mkInductive0 mod_path name) idx [].
 
-Definition mkIndTermN (mod_path : modpath) (name : ident) (n : nat) :=
-  tInd (mkInductiveN mod_path name n) [].
+Definition mkIndTerm (mod_path : modpath) (name : ident) (n : nat) :=
+  tInd (mkInductive n mod_path name) [].
 
-Definition mkIndTerm (mod_path : modpath) (name : ident) : term :=
-  mkIndTermN mod_path name 0.
+Definition mkIndTerm0 (mod_path : modpath) (name : ident) : term :=
+  mkIndTerm mod_path name 0.
 
-
-Definition mutIndTemplate (indType : term) (relName : ident) (ctors : list Constr) unis : mutual_inductive_body :=
+Definition mkMutInd (rel_name : ident) (ind_type : term) (ctors : list constructor) unis : mutual_inductive_body :=
   {|
     ind_finite := Finite;
     ind_npars := 0;
     ind_params := [];
     ind_bodies := 
     [{|
-      ind_name := relName;
-      ind_type := indType;
+      ind_name := rel_name;
+      ind_type := ind_type;
       ind_kelim := IntoAny;
       ind_ctors := ctors;
       ind_projs := [];
@@ -134,19 +123,11 @@ Definition mutIndTemplate (indType : term) (relName : ident) (ctors : list Const
 
 (* Proxy references *)
 
-Fixpoint descNatList (n : nat) : list nat :=
-  match n with
-  | S n' => n :: (descNatList n')
-  | 0 => [0]
-  end.
 
-Definition descRelList (n : nat) : list term :=
-  map tRel (descNatList n).
-
-Fixpoint proxyRefOfTypeTerm (tm : term) (depth : nat) (tag_ref : term) (ind_idx : nat) : term :=
+Fixpoint proxyRefOfType (tm : term) (depth : nat) (tag_ref : term) (ind_idx : nat) : term :=
   match tm with
   | tProd bind type tm' =>
-      tLambda bind type (proxyRefOfTypeTerm tm' (depth + 1) tag_ref ind_idx)
+      tLambda bind type (proxyRefOfType tm' (depth + 1) tag_ref ind_idx)
   | tSort _ =>
       tApp
         (* reference to proxy *)
@@ -162,7 +143,7 @@ Fixpoint proxyRefOfTypeTerm (tm : term) (depth : nat) (tag_ref : term) (ind_idx 
   end.
 
 Definition proxyRefOfInd (body : one_inductive_body) (tag_ref : term) (ind_idx : nat) : term :=
-  proxyRefOfTypeTerm body.(ind_type) 0 tag_ref ind_idx.
+  proxyRefOfType body.(ind_type) 0 tag_ref ind_idx.
     
 Fixpoint proxyRefsOfInds (inds : list one_inductive_body) (tag_ref : nat -> term) (idx : nat) : list (nat -> term):=
   match inds with
@@ -180,12 +161,14 @@ Definition proxyRefsOfMind (mind : mutual_inductive_body) (tag_ref : nat -> term
 
 (* Tag type *)
 
-Definition mkTagMutInd (relName : ident) (ctors : list Constr) unis lvls : mutual_inductive_body :=
+Definition mkTagMutInd (rel_name : ident) (ctors : list constructor) unis lvls : mutual_inductive_body :=
   let (lSet, _) := monomorphic_udecl unis in
   let lvls := map (fun l => (l, true)) lvls in
   match lvls with
-  | [] => mutIndTemplate (tSort empty_uni) relName ctors unis
-  | (l :: ls) => mutIndTemplate (tSort (Universe.from_kernel_repr l ls)) relName ctors unis
+  | [] => 
+      mkMutInd rel_name (tSort empty_uni) ctors unis
+  | (l :: ls) => 
+      mkMutInd rel_name (tSort (Universe.from_kernel_repr l ls)) ctors unis
   end.
 
 Fixpoint toConstrType (term : term) (n : nat) : TemplateMonad (Ast.term * nat) :=
@@ -199,7 +182,7 @@ Fixpoint toConstrType (term : term) (n : nat) : TemplateMonad (Ast.term * nat) :
       tmFail "Type of term did not match tSort or tProd"
   end.
 
-Definition toTagTypeConstr (mind_body : one_inductive_body) : TemplateMonad Constr :=
+Definition toTagTypeConstr (mind_body : one_inductive_body) : TemplateMonad constructor :=
   constr_name <- tmFreshName (mind_body.(ind_name) ++ "_tag") ;;
   mlet (tm, n) <- toConstrType mind_body.(ind_type) 0 ;;
   tmReturn (constr_name, tm, n).
@@ -212,14 +195,11 @@ Definition mkProxyTagType (mind : mutual_inductive_body) : TemplateMonad (ident 
       name <- tmFreshName (ind.(ind_name) ++ "_proxy_tag");;
       constrs <- monad_map toTagTypeConstr inds ;;
 
-      tag_minds <- monad_map tmQuoteInductive (indsFromMind mind);;
-      let lvls := flat_map lvlsFromMind (mind :: tag_minds) in
+      tag_minds <- monad_map tmQuoteInductive (mapMindType indKernamesOfType mind);;
+      let lvls := flat_map (mapMindType levelsOfType) (mind :: tag_minds) in
       let lSetLvls := LevelSetProp.of_list lvls in
       let (lSet, cSet) := monomorphic_udecl mind.(ind_universes) in
       let uni := Monomorphic_ctx (LevelSet.inter lSet lSetLvls, cSet) in
-
-      (* This invert aligns the constructor order with the DeBruijn indices later on *)
-      (* FIXME: no longer necessary after changes have been made *)
       let constrs_inv := rev constrs in
       let tag_decl := mkTagMutInd name constrs_inv uni lvls in
       tmReturn (name, tag_decl)
@@ -233,17 +213,17 @@ Definition mkProxyTagType (mind : mutual_inductive_body) : TemplateMonad (ident 
 
 (* Proxy type *)
 
-Definition mkProxyMutInd (tagInd: inductive) relName ctors : mutual_inductive_body :=
+Definition mkProxyMutInd (tag_ind: inductive) rel_name ctors : mutual_inductive_body :=
   let type :=
     (tProd
     {| binder_name := nAnon; binder_relevance := Relevant |}
-    (tInd tagInd [])
+    (tInd tag_ind [])
     (tSort (Universe.of_levels (inl PropLevel.lProp))))
   in 
-    mutIndTemplate type relName ctors (Monomorphic_ctx (LevelSet.empty, ConstraintSet.empty)).
+    mkMutInd rel_name type ctors (Monomorphic_ctx (LevelSet.empty, ConstraintSet.empty)).
 
-Fixpoint toTagConstr (tagTerm : nat -> term) (depth : nat) (constr : term) : term :=
-  let rec := toTagConstr tagTerm in
+Fixpoint toTagConstr (tag_term : nat -> term) (depth : nat) (constr : term) : term :=
+  let rec := toTagConstr tag_term in
   match constr with
     (* handle the premises/result of a constructor separately *)
   | tProd bind t1 t2 =>
@@ -252,12 +232,12 @@ Fixpoint toTagConstr (tagTerm : nat -> term) (depth : nat) (constr : term) : ter
   | tRel n =>
       if (Nat.ltb n depth) 
       then tRel n
-      else tApp (tRel depth) [tagTerm (n - depth)]
+      else tApp (tRel depth) [tag_term (n - depth)]
       (* an application of a relation and some arguments *)
   | tApp (tRel n) t2 as app =>
       if (Nat.ltb n depth) 
       then app
-      else tApp (tRel depth) [tApp (tagTerm (n - depth)) t2]
+      else tApp (tRel depth) [tApp (tag_term (n - depth)) t2]
   | tApp tm tms =>
       tApp tm (map (rec depth) tms)
   | tLambda bind ty tm =>
@@ -277,7 +257,7 @@ Fixpoint toTagConstr (tagTerm : nat -> term) (depth : nat) (constr : term) : ter
   | tm => tm
   end.
 
-Definition mkProxyTypeConstr (tag_name : ident) (mod_path : modpath) (constr : Constr)  : Constr :=
+Definition mkProxyTypeConstr (tag_name : ident) (mod_path : modpath) (constr : constructor)  : constructor :=
   match constr with
   | (name, term, arity) =>
       let name' := (name ++ "_proxy") in
@@ -292,7 +272,7 @@ Definition mkProxyType (mind : mutual_inductive_body) (tag_name : ident) (mod_pa
       None
   | (ind :: _) as inds =>     
       let name := (ind.(ind_name) ++ "_proxy") in
-      let type := mkInductive mod_path tag_name in
+      let type := mkInductive0 mod_path tag_name in
       let ctors := flat_map ind_ctors inds in
       let ctors' := map (mkProxyTypeConstr tag_name mod_path) ctors in
       Some (name, mkProxyMutInd type name ctors')
@@ -329,23 +309,23 @@ Definition mkSoundDefinition (mod_path : modpath) (ind_def : mutual_inductive_bo
         binder_name := nNamed "tag";
         binder_relevance := Relevant
       |}
-      (mkIndTerm mod_path tag_name)
+      (mkIndTerm0 mod_path tag_name)
       (tProd
         {|
           binder_name := nAnon;
           binder_relevance := Relevant
         |}
         (tApp
-        (mkIndTerm mod_path proxy_name)
+        (mkIndTerm0 mod_path proxy_name)
           [tRel 0])
         (tCase
-          (mkInductive mod_path tag_name, 0, Relevant)
+          (mkInductive0 mod_path tag_name, 0, Relevant)
           (tLambda
             {|
               binder_name := nNamed "tag";
               binder_relevance := Relevant
             |}
-            (mkIndTerm mod_path tag_name)
+            (mkIndTerm0 mod_path tag_name)
               (tSort (Universe.of_levels (inl PropLevel.lProp)))
             )
             (tRel 1)
@@ -353,7 +333,7 @@ Definition mkSoundDefinition (mod_path : modpath) (ind_def : mutual_inductive_bo
               let tagCaseWithoutInds := (map (fun x => tagCaseFromType (ind_type x)) ind_def.(ind_bodies)) in
 
               (* The following reverse is necessary since the tag constructor are in opposite order*)
-              let inds := map (mkIndTermN mod_path ind_name) (descNatList (List.length tagCaseWithoutInds - 1)) in
+              let inds := map (mkIndTerm mod_path ind_name) (descNatList (List.length tagCaseWithoutInds - 1)) in
               (zipWith Basics.apply (rev tagCaseWithoutInds) inds)
             )
           )
