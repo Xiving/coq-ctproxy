@@ -86,7 +86,7 @@ Fixpoint indKernamesOfType (tm : term) : list kername :=
 
 (* Inductive template definitions etc. *)
 
-Definition constructor := ((ident * term) * nat) : Type.
+Definition IndConstr := ((ident * term) * nat) : Type.
 
 Definition mkInductive n mod_path name : inductive :=
   {| inductive_mind := (mod_path, name); inductive_ind := n |}.
@@ -102,7 +102,7 @@ Definition mkIndTerm (mod_path : modpath) (name : ident) (n : nat) :=
 Definition mkIndTerm0 (mod_path : modpath) (name : ident) : term :=
   mkIndTerm mod_path name 0.
 
-Definition mkMutInd (rel_name : ident) (ind_type : term) (ctors : list constructor) unis : mutual_inductive_body :=
+Definition mkMutInd (rel_name : ident) (ind_type : term) (ctors : list IndConstr) unis : mutual_inductive_body :=
   {|
     ind_finite := Finite;
     ind_npars := 0;
@@ -161,7 +161,7 @@ Definition proxyRefsOfMind (mind : mutual_inductive_body) (tag_ref : nat -> term
 
 (* Tag type *)
 
-Definition mkTagMutInd (rel_name : ident) (ctors : list constructor) unis lvls : mutual_inductive_body :=
+Definition mkTagMutInd (rel_name : ident) (ctors : list IndConstr) unis lvls : mutual_inductive_body :=
   let (lSet, _) := monomorphic_udecl unis in
   let lvls := map (fun l => (l, true)) lvls in
   match lvls with
@@ -182,7 +182,7 @@ Fixpoint toConstrType (term : term) (n : nat) : TemplateMonad (Ast.term * nat) :
       tmFail "Type of term did not match tSort or tProd"
   end.
 
-Definition toTagTypeConstr (mind_body : one_inductive_body) : TemplateMonad constructor :=
+Definition toTagTypeConstr (mind_body : one_inductive_body) : TemplateMonad IndConstr :=
   constr_name <- tmFreshName (mind_body.(ind_name) ++ "_tag") ;;
   mlet (tm, n) <- toConstrType mind_body.(ind_type) 0 ;;
   tmReturn (constr_name, tm, n).
@@ -225,7 +225,7 @@ Definition mkProxyMutInd (tag_ind: inductive) rel_name ctors : mutual_inductive_
 Fixpoint toTagConstr (tag_term : nat -> term) (depth : nat) (constr : term) : term :=
   let rec := toTagConstr tag_term in
   match constr with
-    (* handle the premises/result of a constructor separately *)
+    (* handle the premises/result of a IndConstr separately *)
   | tProd bind t1 t2 =>
       tProd bind (rec depth t1) (rec (S depth) t2)
       (* a relation without arguments *)
@@ -257,7 +257,7 @@ Fixpoint toTagConstr (tag_term : nat -> term) (depth : nat) (constr : term) : te
   | tm => tm
   end.
 
-Definition mkProxyTypeConstr (tag_name : ident) (mod_path : modpath) (constr : constructor)  : constructor :=
+Definition mkProxyTypeConstr (tag_name : ident) (mod_path : modpath) (constr : IndConstr)  : IndConstr :=
   match constr with
   | (name, term, arity) =>
       let name' := (name ++ "_proxy") in
@@ -300,7 +300,7 @@ Definition tagCaseFromType (tm : term) (ind_ref : term) :=
 Definition getName (mind : mutual_inductive_body) : ident :=
   nth_default "" (map ind_name mind.(ind_bodies)) 0.
   
-Definition mkSoundDefinition (mod_path : modpath) (ind_def : mutual_inductive_body) : term :=
+Definition mkSoundDefinition (ind_mod_path : modpath) (mod_path : modpath) (ind_def : mutual_inductive_body) : term :=
   let ind_name := getName ind_def in
   let proxy_name := ind_name ++ "_proxy" in
   let tag_name := proxy_name ++ "_tag" in
@@ -332,15 +332,14 @@ Definition mkSoundDefinition (mod_path : modpath) (ind_def : mutual_inductive_bo
             (
               let tagCaseWithoutInds := (map (fun x => tagCaseFromType (ind_type x)) ind_def.(ind_bodies)) in
 
-              (* The following reverse is necessary since the tag constructor are in opposite order*)
-              let inds := map (mkIndTerm mod_path ind_name) (descNatList (List.length tagCaseWithoutInds - 1)) in
+              (* The following reverse is necessary since the tag IndConstr are in opposite order*)
+              let inds := map (mkIndTerm ind_mod_path ind_name) (descNatList (List.length tagCaseWithoutInds - 1)) in
               (zipWith Basics.apply (rev tagCaseWithoutInds) inds)
             )
           )
       )
     )
 .
-
 
 (* Derivation of tag and proxy type *)
 
@@ -350,7 +349,8 @@ Fixpoint deriveCTProxyTerm tm :=
       deriveCTProxyTerm tm1
   | tInd ind_term _ =>
       mod_path <- tmCurrentModPath tt;;
-      mind <- tmQuoteInductive (inductive_mind ind_term);; 
+      let (ind_mod_path, ind_name) := inductive_mind ind_term in
+      mind <- tmQuoteInductive (ind_mod_path, ind_name);; 
       
       mlet (tag_name, tag_term) <- mkProxyTagType mind ;;
       tmMkInductive' tag_term;;
@@ -360,15 +360,13 @@ Fixpoint deriveCTProxyTerm tm :=
           tmMkInductive' proxy_decl;;
           
           (* Proxy soundness proof *)
-          let sound_def := mkSoundDefinition mod_path mind in
-
-          sound_def' <- tmEval lazy sound_def;;
-          tmPrint sound_def';;
-
+          let sound_def := mkSoundDefinition (ind_mod_path) mod_path mind in
           t' <- tmUnquote sound_def ;;
           t'' <- tmEval (unfold (Common_kn "my_projT2")) (my_projT2 t') ;;
           tmDefinitionRed (proxy_name ++ "_sound_type") (Some (unfold (Common_kn "my_projT1"))) t'';;
-          tmMsg ""
+
+          (* Necessary, because of the antics of using TemplateMonad *)
+          tmReturn unit
       | _ =>
           tmFail "failed to make a proxy type"
       end
@@ -380,3 +378,6 @@ Fixpoint deriveCTProxyTerm tm :=
 Definition deriveCTProxy {A} (ind : A) :=
   tm <- tmQuote ind ;;
   deriveCTProxyTerm tm.
+
+Ltac deriveCTProxy_sound Hints :=
+  intros tag H; induction H; subst; eauto with Hints. 
